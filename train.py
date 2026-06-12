@@ -2,37 +2,42 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from models.base import MLP, SIREN
 
 c = 20.0
 lam = 2.0
-K_MIN, K_MAX = .94, .97 # 1.2, 2.0 
+K_MIN, K_MAX = .94, .97# 1.2, 2.0 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-class PINN(nn.Module):
-    def __init__(self, hidden_dim=128):
-        super(PINN, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(2, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 1)
-        )
+# class PINN(nn.Module):
+#     def __init__(self, hidden_dim=128):
+#         super(PINN, self).__init__()
+#         self.net = nn.Sequential(
+#             nn.Linear(2, hidden_dim),
+#             nn.GELU(),
+#             nn.Linear(hidden_dim, hidden_dim),
+#             nn.GELU(),
+#             nn.Linear(hidden_dim, hidden_dim),
+#             nn.GELU(),
+#             nn.Linear(hidden_dim, 1)
+#         )
         
-    def forward(self, x, k):
-        inputs = torch.cat([x, k], dim=-1)
-        return self.net(inputs)
+#     def forward(self, x, k):
+#         inputs = torch.cat([x, k], dim=-1)
+#         return self.net(inputs)
 
 def get_p(model, x, k):
     """
     Applique la reformulation (ansatz) pour imposer p(1) = k^2 p(0) par construction.
     """
-    N_x = model(x, k)
+    inputs = torch.cat([x, k], dim=-1)
+    N_x = model(inputs)
+    
     zeros = torch.zeros_like(x)
-    N_0 = model(zeros, k)
+    inputs = torch.cat([zeros, k], dim=-1)
+    N_0 = model(inputs)
+    
     p = (1 - x) * N_x + x * (k**2) * N_0
     return p
 
@@ -51,6 +56,7 @@ def loss_phys(model, x, k):
     )[0]
     
     res = c * dp_dx + lam * p + 1.0
+    # return nn.HuberLoss(delta=100)(res, 0*res)
     return torch.mean(res**2)
 
 
@@ -69,16 +75,27 @@ def exact_solution(x, k):
 
 
 # %% Boucle d'entraînement
-epochs = 5000*2
+EPOCHS = 5000
 N_f = 2000
+LR = 1e-3#1e-2/2
+SCHEDULER_STEP = EPOCHS // 5
 
-model = PINN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-2/2)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=epochs//5, gamma=0.5)
+# model = PINN().to(device)
+model = MLP(in_dim=2,
+            out_dim=1,
+            hidden_dim=64*4,
+            n_layers=4).to(device)
+# model = SIREN(in_dim=2, 
+#               out_dim=1,
+#               hidden_dim=64,
+#               n_layers=4).to(device)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=0.5)
 
 print("Début de l'entraînement...")
 loss_history = []
-for epoch in range(epochs):
+for epoch in range(EPOCHS):
     model.train()
     
     # Échantillonnage aléatoire uniforme dans [0, 1]x[0, 2] à chaque époque
@@ -95,7 +112,7 @@ for epoch in range(epochs):
     loss_history.append(loss.item())
     
     if (epoch + 1) % 500 == 0:
-        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {loss.item():.4e} - LR: {scheduler.get_last_lr()[0]:.4e}")
+        print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {loss.item():.4e} - LR: {scheduler.get_last_lr()[0]:.4e}")
 
 print("Entraînement terminé !")
 
