@@ -8,14 +8,10 @@ from models.base import MLP
 
 c = 20.0
 lam = 2.0
-K_MIN, K_MAX = 0., 2. # .9, 1.# 1.2, 2.0 
+K_MIN, K_MAX = .8, 1.1# 0., 2. # .9, 1.# 1.2, 2.0 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-
-class GaussianActivation(nn.Module):
-    def forward(self, x):
-        return torch.exp(-(100*x**2)) #############
     
 class PINN(nn.Module):
     def __init__(self, hidden_dim=128, n_layers=3):
@@ -26,14 +22,6 @@ class PINN(nn.Module):
                          out_dim=1,
                          hidden_dim=hidden_dim,
                          n_layers=n_layers,
-                         # activation=nn.Tanh,# GaussianActivation
-                         )
-        
-        self.net2 = MLP(in_dim=1,
-                         out_dim=1,
-                         hidden_dim=hidden_dim,
-                         n_layers=n_layers,
-                          # activation=GaussianActivation
                          )
         
         self.den = MLP(in_dim=1,
@@ -45,6 +33,7 @@ class PINN(nn.Module):
                         out_dim=1,
                         hidden_dim=hidden_dim,
                         n_layers=n_layers)
+        
         self._initialize_safe_amplitude()
     
     def _initialize_safe_amplitude(self):      
@@ -57,26 +46,13 @@ class PINN(nn.Module):
         nn.init.normal_(self.den.network[-1].weight, mean=0.0, std=std_noise)
         nn.init.constant_(self.den.network[-1].bias, 1.0)
         
-        # Pour le réseau de forme N(x,k) : on le force à sortir 0 au début pour démarrer 
-        # sur une simple droite de base avant de se courber.
-        # nn.init.normal_(self.net.network[-1].weight, mean=0.0, std=std_noise)
-        # nn.init.constant_(self.net.network[-1].bias, 0.0)
-        
     def forward(self, x, k):
         
-        # def N(inputs):
-        #     # return self.net(inputs)
-        #     return self.net(inputs) / (self.den(inputs)**2 + 1e-8)
-        #     # return self.net2(k) * torch.exp(self.net3(k)) + self.net(inputs)
-        #     # return self.num(inputs) + self.net(inputs) / (self.den(inputs)**2 + 1e-8)
-        
         # inputs = torch.cat([x, k], dim=-1)
-        # N_x = N(inputs)
-        
-        # # -- reformulation pour imposer p(1) = k^2 p(0) par construction        
+        # N_x = self.net(inputs)
         # zeros = torch.zeros_like(x)
         # inputs = torch.cat([zeros, k], dim=-1)
-        # N_0 = N(inputs)
+        # N_0 = self.net(inputs)
         # p = (1 - x) * N_x + x * (k**2) * N_0
         
         
@@ -93,17 +69,19 @@ def get_grad(fx, x):
                               create_graph=True)[0]
 
 
-def loss_phys(model, x, k):
+def get_residual(model, x, k):
     """
     Calcule le résidu de l'EDO : c*p'(x) + lam*p(x) + 1 = 0
     """
     p = model(x, k)
     dp_dx = get_grad(p, x)
     res = c * dp_dx + lam * p + 1.0
-    
     # res_relative = res / (p.abs() + 1.)
-    # return torch.mean(res_relative**2)
-    return torch.mean(res**2)
+    return res
+
+
+def get_loss(residual):
+    return torch.mean(residual**2)
 
 
 def model_exact(x, k):
@@ -113,7 +91,7 @@ def model_exact(x, k):
 
 
 # %% Boucle d'entraînement
-EPOCHS = 1000*2
+EPOCHS = 2000 #* 5
 N_f = 2000//2
 LR = 1e-2/4
 SCHEDULER_STEP = EPOCHS // 5
@@ -138,7 +116,8 @@ for epoch in range(EPOCHS):
         
         optimizer.zero_grad()
         
-        loss = loss_phys(model, x_train, k_train)
+        residual = get_residual(model, x_train, k_train)
+        loss = get_loss(residual)
         ######## TEST SUPERVISE
         # p_true = model_exact(x_train, k_train)
         # p_pred = model(x_train, k_train)
@@ -162,19 +141,20 @@ for epoch in range(EPOCHS):
 print("Entraînement terminé !")
 
 
-
-
 # %% Phase d'optimisation L-BFGS
+import copy 
+model_back = copy.deepcopy(model)
+
 print("\nDébut du raffinement L-BFGS...")
 
-N_f_lbfgs = 10000
+N_f_lbfgs = 1000 * 20
 x_lbfgs = torch.rand(N_f_lbfgs, 1, requires_grad=True, device=device)
 k_lbfgs = K_MIN + torch.rand(N_f_lbfgs, 1, device=device) * (K_MAX - K_MIN)
 
 # 1. Configuration avec tolérances écrasées et petites itérations
 lbfgs_optimizer = torch.optim.LBFGS(
     model.parameters(),
-    lr=1.0,
+    lr=.1,
     max_iter=100,           # Limite interne très courte
     max_eval=125,           # Toujours supérieur à max_iter
     tolerance_grad=1e-11,   # On empêche l'arrêt prématuré
@@ -191,7 +171,8 @@ def closure():
     global global_lbfgs_step
     lbfgs_optimizer.zero_grad()
     
-    loss = loss_phys(model, x_lbfgs, k_lbfgs)
+    residual = get_residual(model, x_lbfgs, k_lbfgs)
+    loss = get_loss(residual)
     loss.backward()
     
     loss_history_lbfgs.append(loss.item())
@@ -264,9 +245,9 @@ with torch.no_grad():
     P_pred = model(X.unsqueeze(-1).to(device), K.unsqueeze(-1).to(device)).squeeze(-1).cpu()
 
 plt.figure(figsize=(10, 6))
-for i, k_val in enumerate(xs):
-    plt.plot(ks, P_true[i, :], '-', linewidth=2, label=f'Exact, k={k_val:.2f}')
-    plt.plot(ks, P_pred[i, :], '--', linewidth=2, label=f'PINN, k={k_val:.2f}')
+for i, x_val in enumerate(xs):
+    plt.plot(ks, P_true[i, :], '-', linewidth=2, label=f'Exact, x={x_val:.2f}')
+    plt.plot(ks, P_pred[i, :], '--', linewidth=2, label=f'PINN, x={x_val:.2f}')
 
 plt.grid(True, alpha=0.3)
 plt.xlabel('x')
