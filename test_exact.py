@@ -6,21 +6,11 @@ c = 20.0
 lam = 2.0
 
 
-def model_exact(*args):
+def model_exact(x, k):
     '''
     !!! SOLUTION QUI CORRESPOND (VISUELLEMENT) A LA FIGURE 6 DU DRAFT
     !!! NE CORRESPOND PAS A p_exact DU DRAFT
-    Args:
-        x, k
-        OR
-        inputs: concatenation of (x, k)
     '''
-    if len(args) == 1:
-        xk = args[0]
-        x, k = xk[..., 0:1], xk[..., 1:2]
-    else:
-        x, k = args
-    
     num = 1- k**2
     den = lam * (np.exp(-lam / c) - k**2)
     return (num / den) * torch.exp(-lam / c * x) - 1 / lam
@@ -44,28 +34,42 @@ def residual(p, x):
     return res
 
 
-# --- p(x, k) courbes pour quelques k
+# --- p(x, k): courbes pour quelques k
 xs = torch.linspace(0, 1, 100)
 ks = torch.tensor([0.0, 0.4, 0.8, 0.9, 1.3, 2.0])
 X, K = torch.meshgrid(xs, ks)
 P = model_exact(X, K)
 
-plt.figure()
-plt.plot(xs, P)
-plt.title('p(x,k) exact')
+plt.figure(figsize=(10, 6))
+colors = plt.cm.viridis(np.linspace(0, 1, len(ks)))
+for i, k_val in enumerate(ks):
+    plt.plot(xs, P[:, i], color=colors[i], linestyle='-', linewidth=2, label=f'Exact, k={k_val:.2f}')
+plt.grid(True, alpha=0.3)
 plt.xlabel('x')
+plt.ylabel('p(x, k)')
+plt.title('Solutions $p(x,k)$ exactes vs $x$')
+plt.legend()
+plt.show()
 
-# --- p(x, k) courbes pour quelques x
-K_MIN, K_MAX = 0, .93 # .951, .9513# 1.2, 2.0 
-xs = torch.linspace(0, 1, 5)
+
+# --- p(x, k): courbes pour quelques x
+K_MIN, K_MAX = 0, 2.#.93 # .951, .9513# 1.2, 2.0 
+xs = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0])
 ks = torch.linspace(K_MIN, K_MAX, 1000)
 X, K = torch.meshgrid(xs, ks)
 P = model_exact(X, K)
 
-plt.figure()
-plt.plot(ks, P.T)
-plt.title('p(x,k) exact')
-plt.xlabel('k')
+plt.figure(figsize=(10, 6))
+colors = plt.cm.viridis(np.linspace(0, 1, len(ks)))
+for i, x_val in enumerate(xs):
+    plt.plot(ks, P[i], color=colors[i], linestyle='-', linewidth=2, label=f'Exact, x={x_val:.2f}')
+plt.grid(True, alpha=0.3)
+plt.xlabel('x')
+plt.ylabel('p(x, k)')
+plt.title('Solutions $p(x,k)$ exactes vs $k$')
+plt.legend()
+plt.show()
+
 
 
 # -- p(x, k) heatmaps
@@ -110,5 +114,3 @@ plt.xlabel('x')
 plt.ylabel('k')
 plt.suptitle('Residual exact')
 
-
-# -- courbes

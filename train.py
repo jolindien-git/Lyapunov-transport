@@ -18,7 +18,7 @@ class GaussianActivation(nn.Module):
         return torch.exp(-(100*x**2)) #############
     
 class PINN(nn.Module):
-    def __init__(self, hidden_dim=128*2, n_layers=3):
+    def __init__(self, hidden_dim=128, n_layers=3):
         
         super(PINN, self).__init__()
         
@@ -26,34 +26,65 @@ class PINN(nn.Module):
                          out_dim=1,
                          hidden_dim=hidden_dim,
                          n_layers=n_layers,
+                         # activation=nn.Tanh,# GaussianActivation
+                         )
+        
+        self.net2 = MLP(in_dim=1,
+                         out_dim=1,
+                         hidden_dim=hidden_dim,
+                         n_layers=n_layers,
                           # activation=GaussianActivation
                          )
         
-        self.den = MLP(in_dim=2,
+        self.den = MLP(in_dim=1,
                         out_dim=1,
                         hidden_dim=hidden_dim,
                         n_layers=n_layers)
         
-        self.num = MLP(in_dim=2,
+        self.num = MLP(in_dim=1,
                         out_dim=1,
                         hidden_dim=hidden_dim,
                         n_layers=n_layers)
+        self._initialize_safe_amplitude()
+    
+    def _initialize_safe_amplitude(self):      
+        std_noise = 0.01
+        # Pour le numérateur : on force la sortie initiale proche de 1.0
+        nn.init.normal_(self.num.network[-1].weight, mean=0.0, std=std_noise)
+        nn.init.constant_(self.num.network[-1].bias, 1.0)
+        
+        # Pour le dénominateur : on force la sortie initiale proche de 1.0 (donc au carré = 1.0)
+        nn.init.normal_(self.den.network[-1].weight, mean=0.0, std=std_noise)
+        nn.init.constant_(self.den.network[-1].bias, 1.0)
+        
+        # Pour le réseau de forme N(x,k) : on le force à sortir 0 au début pour démarrer 
+        # sur une simple droite de base avant de se courber.
+        # nn.init.normal_(self.net.network[-1].weight, mean=0.0, std=std_noise)
+        # nn.init.constant_(self.net.network[-1].bias, 0.0)
         
     def forward(self, x, k):
         
-        def N(inputs):
-            # return self.net(inputs)
-            return self.net(inputs) / (self.den(inputs)**2 + 1e-8)
-            # return self.num(inputs) + self.net(inputs) / (self.den(inputs)**2 + 1e-8)
+        # def N(inputs):
+        #     # return self.net(inputs)
+        #     return self.net(inputs) / (self.den(inputs)**2 + 1e-8)
+        #     # return self.net2(k) * torch.exp(self.net3(k)) + self.net(inputs)
+        #     # return self.num(inputs) + self.net(inputs) / (self.den(inputs)**2 + 1e-8)
+        
+        # inputs = torch.cat([x, k], dim=-1)
+        # N_x = N(inputs)
+        
+        # # -- reformulation pour imposer p(1) = k^2 p(0) par construction        
+        # zeros = torch.zeros_like(x)
+        # inputs = torch.cat([zeros, k], dim=-1)
+        # N_0 = N(inputs)
+        # p = (1 - x) * N_x + x * (k**2) * N_0
+        
         
         inputs = torch.cat([x, k], dim=-1)
-        N_x = N(inputs)
+        N_xk = self.net(inputs)
+        A_k = self.num(k) / (self.den(k)**2 + 1e-8)
+        p = A_k * ( 1 + x*(k**2-1) + x*(1-x)*N_xk)
         
-        # -- reformulation pour imposer p(1) = k^2 p(0) par construction        
-        zeros = torch.zeros_like(x)
-        inputs = torch.cat([zeros, k], dim=-1)
-        N_0 = N(inputs)
-        p = (1 - x) * N_x + x * (k**2) * N_0
         return p
 
 
@@ -76,22 +107,14 @@ def loss_phys(model, x, k):
 
 
 def model_exact(x, k):
-    '''
-    !!! SOLUTION QUI CORRESPOND (VISUELLEMENT) A LA FIGURE 6 DU DRAFT
-    !!! NE CORRESPOND PAS A p_exact DU DRAFT
-    '''
     num = 1- k**2
     den = lam * (np.exp(-lam / c) - k**2)
     return (num / den) * torch.exp(-lam / c * x) - 1 / lam
 
-    # num = k**2 - 1
-    # den = lam * (np.exp(lam/c) - k**2)
-    # return (num / den) * np.exp((lam/c) * x) + (1/lam)
-
 
 # %% Boucle d'entraînement
-EPOCHS = 5000*4*2
-N_f = 2000
+EPOCHS = 1000*2
+N_f = 2000//2
 LR = 1e-2/4
 SCHEDULER_STEP = EPOCHS // 5
 
@@ -106,44 +129,104 @@ loss_history = []
 for epoch in range(EPOCHS):
     model.train()
     
-    # Échantillonnage aléatoire uniforme dans [0, 1]x[0, 2] à chaque époque
-    x_train = torch.rand(N_f, 1, requires_grad=True, device=device)
-    k_train = K_MIN + torch.rand(N_f, 1, device=device) * (K_MAX - K_MIN)
+    N_BATCHS = 10
+    loss_mean = 0
+    for batch in range(N_BATCHS):
+        # Échantillonnage aléatoire uniforme dans [0, 1]x[0, 2] à chaque époque
+        x_train = torch.rand(N_f, 1, requires_grad=True, device=device)
+        k_train = K_MIN + torch.rand(N_f, 1, device=device) * (K_MAX - K_MIN)
+        
+        optimizer.zero_grad()
+        
+        loss = loss_phys(model, x_train, k_train)
+        ######## TEST SUPERVISE
+        # p_true = model_exact(x_train, k_train)
+        # p_pred = model(x_train, k_train)
+        # loss = nn.HuberLoss()(p_true, p_pred)
+        
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+        optimizer.step()
+        
+        loss_mean += loss.item() / N_BATCHS
+        
+    loss_history.append(loss_mean)
     
-    optimizer.zero_grad()
-    
-    loss = loss_phys(model, x_train, k_train)
-    ######## TEST SUPERVISE
-    # p_true = model_exact(x_train, k_train)
-    # p_pred = model(x_train, k_train)
-    # loss = nn.HuberLoss()(p_true, p_pred)
-    
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-    optimizer.step()
-    scheduler.step()
-    
-    loss_history.append(loss.item())
-    
-    if (epoch + 1) % 500 == 0:
+    if (epoch + 1) % 50 == 0 or epoch == 0 or epoch ==EPOCHS-1:
         # idx = p_true.argmax().item()
         # print("k %.6f  x %.2f  p %.2e" % (k_train[idx], x_train[idx], p_true[idx].item()))
-        print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {loss.item():.4e} - LR: {scheduler.get_last_lr()[0]:.4e}")
+        print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {loss_mean:.3e} - LR: {scheduler.get_last_lr()[0]:.2e}")
+    
+    scheduler.step()
 
 print("Entraînement terminé !")
 
 
-# --- Plot 1: Historique de la Loss ---
+
+
+# %% Phase d'optimisation L-BFGS
+print("\nDébut du raffinement L-BFGS...")
+
+N_f_lbfgs = 10000
+x_lbfgs = torch.rand(N_f_lbfgs, 1, requires_grad=True, device=device)
+k_lbfgs = K_MIN + torch.rand(N_f_lbfgs, 1, device=device) * (K_MAX - K_MIN)
+
+# 1. Configuration avec tolérances écrasées et petites itérations
+lbfgs_optimizer = torch.optim.LBFGS(
+    model.parameters(),
+    lr=1.0,
+    max_iter=100,           # Limite interne très courte
+    max_eval=125,           # Toujours supérieur à max_iter
+    tolerance_grad=1e-11,   # On empêche l'arrêt prématuré
+    tolerance_change=1e-11, # On empêche l'arrêt prématuré
+    history_size=100,
+    line_search_fn="strong_wolfe"
+)
+
+# Variables pour le suivi
+lbfgs_epochs = 50   # 50 appels * 100 max_iter = 5000 itérations potentielles
+global_lbfgs_step = 0
+loss_history_lbfgs = []
+def closure():
+    global global_lbfgs_step
+    lbfgs_optimizer.zero_grad()
+    
+    loss = loss_phys(model, x_lbfgs, k_lbfgs)
+    loss.backward()
+    
+    loss_history_lbfgs.append(loss.item())
+    global_lbfgs_step += 1
+    return loss
+
+# 2. Boucle externe de relance
+model.train()
+for epoch in range(lbfgs_epochs):
+    # L-BFGS va tourner pour max_iter (100) étapes, puis nous rendre la main
+    lbfgs_optimizer.step(closure)
+    
+    # On imprime l'état actuel après cette rafale
+    current_loss = loss_history_lbfgs[-1]
+    print(f"L-BFGS Rafale [{epoch+1}/{lbfgs_epochs}] - Steps totaux: {global_lbfgs_step} - Loss: {current_loss:.4e}")
+    
+    # Optionnel: Arrêt manuel si la loss est vraiment excellente
+    if current_loss < 1e-7:
+        print("Convergence jugée suffisante, arrêt anticipé.")
+        break
+
+print("Raffinement L-BFGS terminé !")
+
+
+# %% Plot 1: Historique de la Loss ---
 plt.figure(figsize=(8, 5))
-plt.plot(loss_history, label='Loss Adam')
-plt.yscale('log')
+len_adam, len_lbfgs = len(loss_history), len(loss_history_lbfgs)
+plt.semilogy(range(len_adam), loss_history, label='Loss Adam')
+plt.semilogy(range(len_adam, len_adam+len_lbfgs), loss_history_lbfgs, label='Loss L-BFGS')
 plt.grid(True, alpha=0.5)
 plt.xlabel('Epoch')
 plt.ylabel('Loss (Log Scale)')
 plt.title('Historique de la Loss Physique')
 plt.legend()
 plt.show()
-
 
 # %% Évaluation et Visualisation
 model.eval()
