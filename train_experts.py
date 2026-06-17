@@ -80,7 +80,7 @@ def model_exact(x, k):
 
 
 # %% Training Loop
-EPOCHS = 2000*2
+EPOCHS = 2000//2#*2
 N_f = 1000
 LR = 1e-2 / 4
 SCHEDULER_STEP = EPOCHS // 5
@@ -132,15 +132,17 @@ for epoch in range(EPOCHS):
         BETA = 0.01 # hard to tune (0 around singularity else .01)
         residual_penalized = residual * (1.0 + BETA * w_U)
         loss = get_loss(residual_penalized)
-            
-        low, high = get_misplaced(k_train, w_U)
-        misplaced_low += low / N_BATCHS
-        misplaced_high += high / N_BATCHS
-        
+         
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
         loss_mean += loss.item() / N_BATCHS
+        
+        # monitoring
+        low, high = get_misplaced(k_train, w_U)
+        misplaced_low += low / N_BATCHS
+        misplaced_high += high / N_BATCHS
+        
         
     loss_history.append(loss_mean)
     
@@ -236,7 +238,7 @@ for param in model.router.parameters():
 
 
 # %% test
-p, w_U = model(x_train, k_train, tau=current_tau)
+p, w_U = model(x_train, k_train)
 thresh = 0.9512294
 
 plt.figure()
@@ -248,8 +250,8 @@ plt.xlabel("k")
 logits = model.router(k_train)
 
 plt.figure()
-plt.plot(k_train[:,0].detach().cpu(), logits[:, 1].detach().cpu(), '.', label='Unconstraint')
-plt.plot(k_train[:,0].detach().cpu(), logits[:, 0].detach().cpu(), '.', label='Constraint (positive)')
+plt.scatter(k_train[:,0].detach().cpu(), logits[:, 1].detach().cpu(), s=1, label='Unconstraint')
+plt.scatter(k_train[:,0].detach().cpu(), logits[:, 0].detach().cpu(), s=1, label='Constraint (positive)')
 plt.legend()
 plt.ylabel("logits")
 plt.xlabel("k")
