@@ -123,8 +123,7 @@ class Problem:
             P_exact_torch(x2, x1, self.k, self.lambd, self.mu, self.sigma, device)
         )
     
-    def check_positivity_Q(self, model, device):
-        degree = 9
+    def check_positivity_Q(self, model, device, degree=9):
         
         def Q_func(x1, x2):
             x1 = torch.as_tensor(x1, device=device, dtype=torch.float32)
@@ -137,8 +136,7 @@ class Problem:
         eigenvalues = check_positivity(Q_func, degree=degree, domain=(0, 1))
         return eigenvalues
     
-    def check_positivity_P(self, model, device):
-        degree = 9
+    def check_positivity_P(self, model, device, degree=9):
         
         @torch.no_grad
         def P_func(x1, x2):

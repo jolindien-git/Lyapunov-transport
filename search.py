@@ -29,22 +29,24 @@ def parse_args():
     
     parser.add_argument('--k0', type=float, default=.0, help="initial guess")
     parser.add_argument('--dk0', type=float, default=.01, help="initial step")
-    parser.add_argument('--alpha', type=float, default=1.2, help="adaptation factor +")
-    parser.add_argument('--beta', type=float, default=2.0, help="adaptation factor -")
+    parser.add_argument('--alpha', type=float, default=1.1, help="adaptation factor +")
+    parser.add_argument('--beta', type=float, default=3.0, help="adaptation factor -")
     
     parser.add_argument('--epochs', type=int, default=100//2, help="number of epochs (stochastic gradient descent)")
     parser.add_argument('--epochs_lbfgs', type=int, default=50//2, help="number of epochs (LBFGS)")
     parser.add_argument('--batch_size', type=int, default=2_000, help="number of collocation point per batch")
     parser.add_argument('--batch_number', type=int, default=20, help="number of batch per epochs (stochastic gradient descent)")
     parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--d', type=int, default=9, help="degree of Gram-matrix test")
+    
     args = parser.parse_args()
     return args
 
 
-def check_stability(model: PINN_P_BC, problem: Problem, device: str):
-    eigenvalues = problem.check_positivity_Q(model, device)
+def check_stability(model: PINN_P_BC, problem: Problem, device: str, degree: int):
+    eigenvalues = problem.check_positivity_Q(model, device, degree)
     if np.all(eigenvalues > 0):
-        eigenvalues = problem.check_positivity_P(model, device)
+        eigenvalues = problem.check_positivity_P(model, device, degree)
         if np.all(eigenvalues > 0):
             return True # GES
         else:
@@ -108,12 +110,13 @@ if __name__ == "__main__":
             print(f"k {k:.4f} Ep [{epoch+1}/{args.epochs}] Loss={epoch_loss:.2e}")
             
             # -- stability check (early stopping)
-            success = is_success(check_stability(model, problem, device),
-                                 search_notGES=args.search_nonGES)
-            if success or time_end():
+            stable = check_stability(model, problem, device, args.d)
+            conclusive = stable is not None
+            success = is_success(stable, search_notGES=args.search_nonGES)
+            if conclusive or time_end():
                 break
 
-        if not success:
+        if not conclusive:
             # -- train (L-BFGS)
             x1, x2 = problem.sample_square(args.batch_size, device)
             
@@ -141,10 +144,12 @@ if __name__ == "__main__":
                 print(f"k {k:.4f} L-BFGS [{epoch+1}/{args.epochs_lbfgs}] -"
                       f"Loss: {loss.item():.2e}")
                 # -- stability check (early stopping)
-                success = is_success(check_stability(model, problem, device),
-                                     search_notGES=args.search_nonGES)
-                if success or time_end():
+                stable = check_stability(model, problem, device, args.d)
+                conclusive = stable is not None
+                success = is_success(stable, search_notGES=args.search_nonGES)
+                if conclusive or time_end():
                     break
+
         
         # save history
         history['k'].append(k)
