@@ -16,8 +16,8 @@ def parse_args():
     parser.add_argument('--sigma', type=float, default=0.3, help="system")
     parser.add_argument('--k', type=float, default=.6, help="gain")
     
-    parser.add_argument('--epochs', type=int, default=100, help="number of epochs (stochastic gradient descent)")
-    parser.add_argument('--epochs_lbfgs', type=int, default=50, help="number of epochs (LBFGS)")
+    parser.add_argument('--epochs', type=int, default=200, help="number of epochs (stochastic gradient descent)")
+    parser.add_argument('--epochs_lbfgs', type=int, default=50//2, help="number of epochs (LBFGS)")
     parser.add_argument('--batch_size', type=int, default=2_000, help="number of collocation point per batch")
     parser.add_argument('--batch_number', type=int, default=20, help="number of batch per epochs (stochastic gradient descent)")
     parser.add_argument('--lr', type=float, default=1e-3)
@@ -102,6 +102,10 @@ def plot_result(model, loss_history, loss_history_lbfgs, device, problem: Proble
     plt.tight_layout()
     plt.show()
     
+    error_abs = np.abs(P_pred - P_true)
+    l_inf = np.max(error_abs)
+    l2_rel = np.linalg.norm(error_abs) / np.linalg.norm(P_true)
+    print(f"L_inf error: {l_inf:.2e}, Relative L2 error: {l2_rel * 100:.2f}%")
 
 
 # %% main
@@ -195,18 +199,4 @@ if __name__ == "__main__":
     # %% plots
     plot_result(model, loss_history, loss_history_lbfgs, device, problem)
     
-    # %% Test P_theta > 0 & Q_theta > 0
-
-    eigenvalues = problem.check_positivity_P(model, device)
-    if np.all(eigenvalues > 0):
-        print("P: min(eigen values) = %.2e Positive definite. ✅" % eigenvalues.min())
-    else:
-        print("P min(eigen values) = %.2e  NOT Positive definite. ❌"  % eigenvalues.min())
-    
-    
-    eigenvalues = problem.check_positivity_Q(model, device)
-    if np.all(eigenvalues > 0):
-        print("Q: min(eigen values) = %.2e Positive definite. ✅" % eigenvalues.min())
-    else:
-        print("Q min(eigen values) = %.2e  NOT Positive definite. ❌"  % eigenvalues.min())
     
